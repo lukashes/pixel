@@ -10,6 +10,10 @@ import (
 	"time"
 )
 
+const (
+	FlushSize = 10000
+)
+
 var (
 	MaxWorker = os.Getenv("MAX_WORKERS")
 	MaxQueue  = os.Getenv("MAX_QUEUE")
@@ -86,13 +90,20 @@ func NewWorker(workerPool chan chan Payload) Worker {
 func (w Worker) Start() {
 	log.Println("Worker started")
 	go func() {
+		con := Redis.Get()
+		ctr := 0
 		for {
 			// register the current worker into the worker queue.
 			w.WorkerPool <- w.JobChannel
 
 			select {
 			case job := <-w.JobChannel:
-				_, err := Redis.Get().Do("INCR", job.String())
+				ctr++
+				if ctr > FlushSize {
+					con.Flush()
+					ctr = 0
+				}
+				err := con.Send("INCR", job.String())
 				if err != nil {
 					log.Printf("Redis error: %s", err.Error())
 				}
@@ -102,6 +113,7 @@ func (w Worker) Start() {
 				return
 			}
 		}
+
 	}()
 }
 
@@ -123,22 +135,24 @@ func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	query := r.URL.Query()
 
-	var content = &Payload{}
+	var content = Payload{}
 	content.Action = query.Get("a")
 	content.SpotID = query.Get("s")
 	content.CampaignID = query.Get("c")
 	content.BannerID = query.Get("b")
 	content.Delay = query.Get("d")
 
-	JobQueue <- *content
+	JobQueue <- content
 
 	w.WriteHeader(http.StatusOK)
 }
 
 func main() {
+	mw, _ := strconv.Atoi(MaxWorker)
+	mq, _ := strconv.Atoi(MaxQueue)
+
 	Redis = &redis.Pool{
-		MaxIdle:     100,
-		IdleTimeout: 240 * time.Second,
+		MaxIdle:     mw,
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", ":6379")
 			if err != nil {
@@ -151,9 +165,6 @@ func main() {
 			return err
 		},
 	}
-
-	mw, _ := strconv.Atoi(MaxWorker)
-	mq, _ := strconv.Atoi(MaxQueue)
 
 	JobQueue = make(chan Payload, mq)
 
