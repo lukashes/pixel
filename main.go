@@ -2,6 +2,7 @@ package main
 
 import (
 	"github.com/garyburd/redigo/redis"
+	"github.com/valyala/fasthttp"
 
 	"log"
 	"net/http"
@@ -124,27 +125,23 @@ func (w Worker) Stop() {
 	}()
 }
 
-type handler struct{}
+func handler(ctx *fasthttp.RequestCtx) {
 
-func (h handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-
-	if r.Method != "GET" {
-		w.WriteHeader(http.StatusMethodNotAllowed)
+	if string(ctx.Method()) != "GET" {
+		ctx.Error("Unsupported method", fasthttp.StatusMethodNotAllowed)
 		return
 	}
 
-	query := r.URL.Query()
-
 	var content = Payload{}
-	content.Action = query.Get("a")
-	content.SpotID = query.Get("s")
-	content.CampaignID = query.Get("c")
-	content.BannerID = query.Get("b")
-	content.Delay = query.Get("d")
+	content.Action = string(ctx.FormValue("a"))
+	content.SpotID = string(ctx.FormValue("s"))
+	content.CampaignID = string(ctx.FormValue("c"))
+	content.BannerID = string(ctx.FormValue("b"))
+	content.Delay = string(ctx.FormValue("d"))
 
 	JobQueue <- content
 
-	w.WriteHeader(http.StatusOK)
+	ctx.Response.Header.SetStatusCode(http.StatusOK)
 }
 
 func main() {
@@ -152,7 +149,7 @@ func main() {
 	mq, _ := strconv.Atoi(MaxQueue)
 
 	Redis = &redis.Pool{
-		MaxIdle:     mw,
+		MaxIdle: mw,
 		Dial: func() (redis.Conn, error) {
 			c, err := redis.Dial("tcp", ":6379")
 			if err != nil {
@@ -171,8 +168,6 @@ func main() {
 	dispatcher := NewDispatcher(mw)
 	dispatcher.Run()
 
-	mux := http.NewServeMux()
-	mux.Handle("/", handler{})
 	log.Println("Listen on port 3000")
-	http.ListenAndServe(":3000", mux)
+	fasthttp.ListenAndServe(":3000", handler)
 }
